@@ -1,0 +1,425 @@
+---
+title: "Homework 03"
+author: "Xiao, Justin (email: BOX11@pitt.edu)"
+date: today
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+    theme: flatly
+---
+
+<style>
+    table {
+      border-collapse: collapse;
+    }
+      table, th, td, thead, tbody{
+        border: 1px solid black;
+    }
+    thead {
+        border-bottom: solid black;
+    }
+</style>
+
+# Overview
+
+> You'll use the `adult.csv` data for this assignment. Description of the dataset can be found in the file `adult.txt`. The dataset is down-sampled from [UCI Adult Dataset](https://archive.ics.uci.edu/ml/datasets/Adult). The dataset you will use in the homework contains census data of 1000 individuals.
+
+> The objective of this assignment is to predict whether a person earns more than 50K (salary =  `>50K`) or not, based on the data. You can extend the samle R code for this assignment: `hw03-sample.R`
+
+
+Task: Apply different classification techniques (including logistic regression, kNN, Naive Bayesian, decision tree, SVM, and Ensemble methods) on this dataset. Use all available predictors in your models.
+    
+1). Use a 10-fold cross-validation to evaluate different classification techniques. 
+
+  1a). Report your 10-fold CV classification results in a performance table shown below. In the table, report the values of different performance measures for each classification technique. For example, you will generate a table like:
+
+
+  Tables        | logistic      |  KNN    |   NB    |   Decision tree |  SVM  | Ensemble  |
+ ---------------|---------------| --------|---------|-----------------|-------|-----------|
+  accuracy      |               |         |         |                 |       |           |
+  precision     |               |         |         |                 |       |           |
+  recall        |               |         |         |                 |       |           |
+  F1            |               |         |         |                 |       |           |
+  AUC           |               |         |         |                 |       |           |
+
+    
+  1b). Generate two bar charts, one for F-score and one for AUC, that allow for visually comparing different classification techniques.
+
+
+2). Report at least two variants for techniques with parameters and incorporate them into your table. For examples, for kNN, you may include kNN-1, kNN-3, kNN-5. For decision tree, you may include the default tree, and a tree after pruning. For SVM, you may include different kernels and gamma/cost parameters.
+
+  
+3). Generate a plot for the ROC curves of each technique from your table into the same figure and include a legend to indicate the name of each curve. For techniques with variants, plot the best curve that has the highest AUC.
+  
+4). In 1-2 paragraphs, summarize the model performance based on your table and the ROC plot (e.g., which one performs the best, the worse, and how).
+  
+**hint: Coerce the categorical variables into discrete numbers because some of the techniques (e.g., kNN) cannot take categorical variables as input.**
+    
+        
+
+
+```{r document_setup, echo=F, message=F, warning=F}
+# This chunk can include things you need for the rest of the document
+library('ggplot2') ## most of the time you will need ggplot
+theme_set(theme_bw()) # change the default ggplot theme to black-and-white
+
+knitr::opts_chunk$set(
+  echo=T, ## show your R code chunk
+  message = F, ## hide the message
+  warning = F, ## hide the warning
+  autodep = T ## make sure your separate code chunks can find the dependencies (from other code chunk)
+)
+```
+
+# Task 1: Use a 10-fold cross-validation to evaluate different classification techniques.
+
+```{r}
+## YOUR CODE HERE
+library(car)
+library(class)
+library(cluster)
+library(tree)
+library(e1071)
+library(MASS)
+library(ada)
+library(pROC)
+library(ROCR)
+
+set.seed(1)
+adult <- read.csv("adult.csv")
+adult <- na.omit(adult)
+
+adult$salary = factor(car::recode(adult$salary,"' >50K'=1;else=0"))
+adult$work = as.factor(adult$work)
+adult$realtoin = as.factor(adult$relation)
+adult$race = as.factor(adult$race)
+adult$sex = as.factor(adult$sex)
+adult$age = as.numeric(adult$age)
+adult$fnlwgt = as.numeric(adult$fnlwgt)
+adult$edu_num = as.numeric(adult$edu_num)
+adult$cap_gain = as.numeric(adult$cap_gain)
+adult$cap_loss = as.numeric(adult$cap_loss)
+adult$hours = as.numeric(adult$hours)
+Xadult = model.matrix(salary~.,data=adult)[,-1]
+
+adult<-adult[sample(nrow(adult)),]
+
+k = 10
+folds <- cut(seq(1,nrow(adult)),breaks=k,labels=FALSE)
+
+accuracy <- matrix(NA, nrow=6, ncol=k)
+precision <- matrix(NA, nrow=6, ncol=k)
+recall <- matrix(NA, nrow=6, ncol=k)
+F1 <- matrix(NA, nrow=6, ncol=k)
+AUC <- matrix(NA, nrow=6, ncol=k)
+ROC_curves <- NULL
+
+for (i in 1:k){
+  testIndices <- which(folds==i,arr.ind=TRUE)
+  xtest <- Xadult[testIndices, ]
+  xtrain <- Xadult[-testIndices, ]
+  ytest <- adult$salary[testIndices]
+  ytrain  <- adult$salary[-testIndices]
+  
+  dtest = adult[testIndices,]
+  dtrain = adult[-testIndices,]
+  
+  answers <- adult[testIndices,]$salary
+  
+  model <- glm(salary~.,family=binomial,data=dtrain)
+  
+  results_prob <- predict(model,newdata=dtest,type='response')
+  btest <- floor(results_prob+0.5)
+  
+  confMat = table(dtest$salary, btest)
+  TP <- confMat[2,2]
+  FP <- confMat[2,1]
+  TN <- confMat[1,1]
+  FN <- confMat[1,2]
+  
+  accuracy[1,i] <- (TP + TN)/nrow(dtest)
+  precision[1,i] <- TP/(TP+FP)
+  recall[1,i] <- TP/(TP+FN)
+  F1[1,i] <- (2*precision[1,i]*recall[1,i])/(precision[1,i]+recall[1,i])
+  
+  pr <- prediction(as.numeric(btest), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC[1,i] <- auc_
+  
+  roc_logistic <- roc(dtest$salary, as.numeric(btest))
+  
+  results <- knn(train=data.frame(xtrain),test=data.frame(xtest),cl=ytrain,k=1)
+
+  TP = sum(answers == 1 & results == 1)
+  FN = sum(answers == 0 & results == 1)
+  FP = sum(answers == 1 & results == 0)
+  TN = sum(answers == 0 & results == 0)
+  
+  accuracy[2,i] <- sum(TP + TN)/nrow(dtest)
+  precision[2,i] <- TP/(TP+FP)
+  recall[2,i] <- TP/(TP+FN)
+  F1[2,i] <- (2*precision[2,i]*recall[2,i])/(precision[2,i]+recall[2,i])
+  
+  pr <- prediction(as.numeric(results), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC[2,i] <- auc_
+  
+  roc_knn <- roc(dtest$salary, as.numeric(results))
+
+  model <- naiveBayes(salary~., data=dtrain)
+  pred <- predict(model, dtest, type="class")
+  
+  confMat = table(dtest$salary, pred)
+  TP <- confMat[2,2]
+  FP <- confMat[2,1]
+  TN <- confMat[1,1]
+  FN <- confMat[1,2]
+  
+  accuracy[3,i] <- sum(TP + TN)/nrow(dtest)
+  precision[3,i] <- TP/(TP+FP)
+  recall[3,i] <- TP/(TP+FN)
+  F1[3,i] <- (2*precision[3,i]*recall[3,i])/(precision[3,i]+recall[3,i])
+  
+  pr <- prediction(as.numeric(pred), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC[3,i] <- auc_
+  
+  roc_nb <- roc(dtest$salary, as.numeric(pred))
+  
+  salaryTree <- tree(salary~.,data=dtrain, mincut=1)
+  
+  results_prob <- predict(salaryTree, dtest, type="class")
+  
+  confMat <- table(dtest$salary, results_prob)
+  TP <- confMat[2,2]
+  FP <- confMat[2,1]
+  TN <- confMat[1,1]
+  FN <- confMat[1,2]
+  
+  accuracy[4,i] <- sum(TP + TN)/nrow(dtest)
+  precision[4,i] <- TP/(TP+FP)
+  recall[4,i] <- TP/(TP+FN)
+  F1[4,i] <- (2*precision[4,i]*recall[4,i])/(precision[4,i]+recall[4,i])
+  
+  pr <- prediction(as.numeric(results_prob), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC[4,i] <- auc_
+  
+  roc_decision <- roc(dtest$salary, as.numeric(results_prob))
+  
+  model <- svm(salary~., data = dtrain)
+  prediction <- predict(model, dtest[,-11])
+  
+  confMat = table(dtest$salary, prediction)
+  TP <- confMat[2,2]
+  FP <- confMat[2,1]
+  TN <- confMat[1,1]
+  FN <- confMat[1,2]
+  
+  accuracy[5,i] <- sum(TP + TN)/nrow(dtest)
+  precision[5,i] <- TP/(TP+FP)
+  recall[5,i] <- TP/(TP+FN)
+  F1[5,i] <- (2*precision[5,i]*recall[5,i])/(precision[5,i]+recall[5,i])
+  
+  pr <- prediction(as.numeric(prediction), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC[5,i] <- auc_
+  
+  roc_svm <- roc(dtest$salary, as.numeric(prediction))
+  
+  model <- ada(salary~., data = dtrain)
+  prediction <- predict(model, dtest[,-11])
+  
+  confMat = table(dtest$salary, prediction)
+  TP <- confMat[2,2]
+  FP <- confMat[2,1]
+  TN <- confMat[1,1]
+  FN <- confMat[1,2]
+  
+  accuracy[6,i] <- sum(TP + TN)/nrow(dtest)
+  precision[6,i] <- TP/(TP+FP)
+  recall[6,i] <- TP/(TP+FN)
+  F1[6,i] <- (2*precision[6,i]*recall[6,i])/(precision[6,i]+recall[6,i])
+  
+  pr <- prediction(as.numeric(prediction), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC[6,i] <- auc_
+  
+  roc_ensemble <- roc(dtest$salary, as.numeric(prediction))
+}
+
+accs = rowMeans(accuracy)
+pres = rowMeans(precision)
+recs = rowMeans(recall)
+f1s = rowMeans(F1)
+aucs = rowMeans(AUC)
+tab <- matrix(c(accs, pres, recs, f1s, aucs), ncol=6, byrow=TRUE)
+```
+
+## Task 1a: Report your 10-fold CV classification results in a performance table.
+```{r}
+## YOUR CODE HERE
+colnames(tab) <- c('logistic', 'KNN', 'NB', 'DecisionTree', 'SVM', 'Ensemble')
+rownames(tab) <- c('accuracy', 'precision', 'recall', 'F1', 'AUC')
+tab <- as.table(tab)
+tab
+```
+
+YOUR ANSWER for Task 1a.
+
+## Task 1b: Generate two bar charts
+```{r}
+## YOUR CODE HERE
+f1_bar = data.frame(Technique=c('logistic', 'KNN', 'NB', 'Decision Tree', 'SVM', 'Ensemble'),
+                    value=f1s)
+p<-ggplot(data=f1_bar, aes(x=Technique, y=value)) +
+  geom_bar(stat="identity")
+p
+
+auc_bar = data.frame(Technique=c('logistic', 'KNN', 'NB', 'Decision Tree', 'SVM', 'Ensemble'),
+                    value=aucs)
+p2<-ggplot(data=f1_bar, aes(x=Technique, y=value)) +
+  geom_bar(stat="identity")
+p2
+```
+
+YOUR ANSWER for Task 1b.
+
+# Task 2. Report at least two variants for techniques with parameters and incorporate them into your table.
+
+```{r}
+## YOUR CODE HERE
+k=10
+# create vectors
+accuracy2 <- matrix(NA, nrow=2, ncol=k)
+precision2 <- matrix(NA, nrow=2, ncol=k)
+recall2 <- matrix(NA, nrow=2, ncol=k)
+F12 <- matrix(NA, nrow=2, ncol=k)
+AUC2 <- matrix(NA, nrow=2, ncol=k)
+
+# 10 fold cross validation
+for (i in 1:k){
+  # segment data by fold
+  testIndices <- which(folds==i,arr.ind=TRUE)
+  xtest <- Xadult[testIndices, ]
+  xtrain <- Xadult[-testIndices, ]
+  ytest <- adult$salary[testIndices]
+  ytrain  <- adult$salary[-testIndices]
+  
+  dtest = adult[testIndices,]
+  dtrain = adult[-testIndices,]
+
+  # Actual answers
+  answers <- adult[testIndices,]$salary
+  
+  # ----- KNN 5 -------------------------------------
+  # nearest 5
+  results <- knn(train=data.frame(xtrain),test=data.frame(xtest),cl=ytrain,k=5)
+
+  # confusion matrix
+  TP = sum(answers == 1 & results == 1)
+  FN = sum(answers == 0 & results == 1)
+  FP = sum(answers == 1 & results == 0)
+  TN = sum(answers == 0 & results == 0)
+
+  # performance calculations
+  accuracy2[1,i] <- sum(TP + TN)/nrow(dtest)
+  precision2[1,i] <- TP/(TP+FP)
+  recall2[1,i] <- TP/(TP+FN)
+  F12[1,i] <- (2*precision[1,i]*recall[1,i])/(precision[1,i]+recall[1,i])
+  # NEED TO CALCULATE AUC
+  pr <- prediction(as.numeric(results), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC2[1,i] <- auc_
+  
+  # add ROC curve
+  roc_knn5 <- roc(dtest$salary, as.numeric(results))
+
+  # ----- Decision Tree ---------------------------
+  # model fitting
+  salaryTree <- tree(salary~.,data=dtrain, mincut=1)
+  
+  # prune tree
+  salaryCut <- prune.tree(salaryTree, best=5)
+  
+  # make predictions
+  results_prob <- predict(salaryCut, dtest, type="class")
+  
+  # confusion matrix
+  confMat <- table(dtest$salary, results_prob)
+  TP <- confMat[2,2]
+  FP <- confMat[2,1]
+  TN <- confMat[1,1]
+  FN <- confMat[1,2]
+  
+  # performance calculations
+  accuracy2[2,i] <- sum(TP + TN)/nrow(dtest)
+  precision2[2,i] <- TP/(TP+FP)
+  recall2[2,i] <- TP/(TP+FN)
+  F12[2,i] <- (2*precision[2,i]*recall[2,i])/(precision[2,i]+recall[2,i])
+  # NEED TO CALCULATE AUC
+  pr <- prediction(as.numeric(results_prob), as.numeric(dtest$salary))
+  prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+  auc_ <- performance(pr, measure = "auc")
+  auc_ <- auc_@y.values[[1]]
+  AUC2[2,i] <- auc_
+  
+  # add ROC curve
+  roc_prune <- roc(dtest$salary, as.numeric(results_prob))
+  
+}
+
+# concatenate test data
+accs2 = rowMeans(accuracy2)
+pres2 = rowMeans(precision2)
+recs2 = rowMeans(recall2)
+f1s2 = rowMeans(F12)
+aucs2 = rowMeans(AUC2)
+tab2 <- matrix(c(accs2, pres2, recs2, f1s2, aucs2), ncol=2, byrow=TRUE)
+
+# concatenate matricies
+tab3 <- cbind(tab,tab2)
+# create table 
+colnames(tab3) <- c('logistic', 'KNN', 'NB', 'DecisionTree', 'SVM', 'Ensemble', 'KNN-5', 'PDT')
+rownames(tab3) <- c('accuracy', 'precision', 'recall', 'F1', 'AUC')
+tab3 <- as.table(tab3)
+tab3
+```
+
+YOUR ANSWER for Task 2.
+
+# Task 3. Generate an ROC plot
+
+```{r}
+## YOUR CODE HERE
+plot(roc_logistic, col="green")
+plot(roc_knn5, add=TRUE, col="blue")
+plot(roc_nb, add=TRUE, col="red")
+plot(roc_decision, add=TRUE, col="purple")
+plot(roc_svm, add=TRUE, col="black")
+plot(roc_ensemble, add=TRUE, col="grey")
+legend("bottomright",c("Logistic Regression","KNN-5","NB","Decision Tree","SVM","Ensemble"),col=c("green","blue","red","purple","black","grey"), lty=1)
+```
+
+YOUR ANSWER for Task 3.
+
+# Task 4. In 1-2 paragraphs, summarize the model performance based on your table and the ROC plot.
+
+Asw:
+From the result given by the ROC plot, the Decision Tree performed the best. On the other hand, the table also shows that the Decision Tree model has the highest accuracy and AUC. Hence, I think the model of Decision Tree performed best. 
